@@ -28,8 +28,6 @@ debug(1) = dy*cos(theta(index_min)) - dx*sin(theta(index_min)); % lateral_error
 debug(2) = linear_v*sin(delta_theta);             % lateral_error_rate
 debug(3) = delta_theta;                                        % heading_error
 debug(4) = anglar_v - linear_v*kappa(index_min);               % heading_error_rate
-
-
 %% 如果路径点较稀疏
 % if index_min==N_ref
 %     x1 = X_ref(index_min-1);y1 = Y_ref(index_min-1);

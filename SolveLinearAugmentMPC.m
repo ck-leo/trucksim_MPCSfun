@@ -81,7 +81,7 @@ for j=1:Np
     Q((j-1)*ny+1:j*ny,(j-1)*ny+1:j*ny)=matrix_q;
 end
 % R
-R=eye(Nc*nu,Nc*nu);   
+R=eye(Nc*nu,Nc*nu);
 for j=1:Nc
     R((j-1)*nu+1:j*nu,(j-1)*nu+1:j*nu)=matrix_r;
 end

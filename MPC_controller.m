@@ -1,4 +1,4 @@
-function [sys,x0,str,ts] = MPCApolloAugment(t,x,u,flag)
+function [sys,x0,str,ts] = MPC_controller(t,x,u,flag)
 % (MATLAB version:R2019a)
 % vehicle dynamics and control
 % [sys,x0,str,ts] = MY_MPCController3(t,x,u,flag)
@@ -10,7 +10,6 @@ function [sys,x0,str,ts] = MPCApolloAugment(t,x,u,flag)
 % outputs. The output of the S-function block is a vector signal
 % consisting of the control variables and the estimated state vector,
 % potentially including estimated disturbance states.
-
 % SFUNTMPL General MATLAB S-Function Template
 %   With MATLAB S-functions, you can define you own ordinary differential
 %   equations (ODEs), discrete system equations, and/or just about
@@ -104,10 +103,7 @@ function [sys,x0,str,ts] = MPCApolloAugment(t,x,u,flag)
 %                           'HasNoSimState' or 'DisallowSimState'. If this value
 %                           is not speficified, then the block's compliance with
 %                           simState feature is set to 'UknownSimState'.
-
-
 %   Copyright 1990-2010 The MathWorks, Inc.
-
 %
 % The following outlines the general structure of an S-function.
 %
@@ -122,7 +118,8 @@ switch flag,
 	basic_state_size_ = 4;% number of state:lateral error,lateral error rate,heading error, heading error rate
     controls_ = 1;% number of controls:delta_f
     vertical_ = 5;% Nc
-    mass_ = 13110;
+    M_SU = 4455;M_US1 = 570;M_US2 = 735;
+    mass_ = M_SU+M_US1+M_US2;
     lf_ = 1110/1000;
     lr_ = 2790/1000;
     cf_ = 2 * (20164.4-15677.2)/(2*pi/180);
@@ -161,6 +158,10 @@ switch flag,
     yaw_ref = pi/4*ones(N,1);
     kappa_ref = zeros(N,1);
     trajectory_analyzer_ = [X_ref,Y_ref,yaw_ref,kappa_ref];
+% 1km sine road
+% load('D:\TRUNK\E_matlab-ros-simulation\map\test_S\trajectory.mat');
+% trajectory_analyzer_ = trajectory;
+% clear trajectory;
   %%%%%%%%%%%%%%%
   % Derivatives %
   %%%%%%%%%%%%%%%
@@ -281,17 +282,25 @@ global matrix_a_ matrix_a_coeff_ matrix_b_ matrix_d_ pre_matrix_d_ matrix_state_
 global trajectory_analyzer_;
 basic_state_size_ = size(matrix_a_,1);% number of state:lateral error,lateral error rate,heading error, heading error rate
 controls_ = size(matrix_b_,2);% number of controls:delta_f
-horizon_ = 10;% Np
+horizon_ = 20;% Np
 vertical_ = size(pre_control_,1)/controls_;% Nc
 % Row = 10;% 松弛因子
+% weight param
+weight_lateral_error = 1;
+weight_lateral_error_rate = 0;
+weight_heading_error = 1;
+weight_heading_error_rate = 0;
+weight_steer = 2;
 ts_ = 0.01;
 wheel_single_direction_max_degree_ = 30;            % max wheel degree(deg)
 curr_u = u(1:5,1);      % current input: x,y,phi,linear_v,anglar_v
 pre_u = u(6:10,1);      % pre input: x,y,phi,linear_v,anglar_v;
-curr_u(3) = curr_u(3)*pi/180; % deg2rad
-curr_u(5) = curr_u(5)*pi/180; % deg2rad
-pre_u(3) = pre_u(3)*pi/180; % deg2rad
-pre_u(5) = pre_u(5)*pi/180; % deg2rad
+curr_u(3) = curr_u(3)*pi/180; % deg -> rad
+curr_u(5) = curr_u(5)*pi/180; % deg -> rad
+curr_u(4) = curr_u(4)/3.6;    % km/h -> m/s
+pre_u(3) = pre_u(3)*pi/180; % deg -> rad
+pre_u(5) = pre_u(5)*pi/180; % deg -> rad
+pre_u(4) = pre_u(4)/3.6;    % km/h -> m/s
 
 global matrix_a_ matrix_a_coeff_ matrix_b_ matrix_d_ pre_matrix_d_ matrix_state_ pre_matrix_state_ matrix_q_ matrix_r_ pre_control_;
 global trajectory_analyzer_;
@@ -302,8 +311,11 @@ global trajectory_analyzer_;
 fprintf('Update start, t=%6.3f\n',t)
 % Trucksim输出为前轴中心的位姿，需要转化为后轴中心
 % debug: lateral_error;lateral_error_rate;heading_error;heading_error_rate
-debug = ComputeLateralErrors(curr_u,trajectory_analyzer_);
-% pre_debug = ComputeLateralErrors(pre_u,trajectory_analyzer_);
+matrix_state_ = ComputeLateralErrors(curr_u,trajectory_analyzer_);
+% matrix_state_(2) = 0;matrix_state_(4) = 0;
+pre_matrix_state_ = x(1:4);
+% pre_matrix_state_(2) = 0;pre_matrix_state_(4) = 0;
+% pre_matrix_state_ = ComputeLateralErrors(pre_u,trajectory_analyzer_);
 %% update matrix
 % update matrix_ad_,matrix_bd_,matrix_dd_,matrix_q_,matrix_r_
 linear_v = curr_u(4);
@@ -316,30 +328,25 @@ matrix_ad_ = inv(eye(basic_state_size_) - ts_ * 0.5 * matrix_a_) * (eye(basic_st
 matrix_bd_ = matrix_b_ * ts_;
 matrix_d_(2,1) = matrix_a_(2,4) - linear_v;
 matrix_d_(4,1) = matrix_a_(4,4);
-pre_matrix_d_(2,1) = matrix_a / pre_linear_v - pre_linear_v;
-pre_matrix_d_(4,1) = -(lf_ * lf_ * cf_ + lr_ * lr_ * cr_) / iz_ / pre_linear_v;
-matrix_dd_ = matrix_d_ * debug(4) * ts_;
-pre_matrix_dd_ = pre_matrix_d_ * pre_debug(4) * ts_;
-matrix_q_ = eye(basic_state_size_);
-matrix_r_ = eye(controls_);
+pre_matrix_d_(2,1) = matrix_a_coeff_(2,4) / pre_linear_v - pre_linear_v;
+pre_matrix_d_(4,1) = matrix_a_coeff_(4,4) / pre_linear_v;
+matrix_dd_ = matrix_d_ * matrix_state_(4) * ts_;
+pre_matrix_dd_ = pre_matrix_d_ * pre_matrix_state_(4) * ts_;
+matrix_q_ = diag([weight_lateral_error,weight_lateral_error_rate,weight_heading_error,weight_heading_error_rate]);
+matrix_r_ = weight_steer;
 
 % update  matrix_lower_,matrix_upper_,matrix_state_,pre_matrix_state_
 matrix_lower_ = -wheel_single_direction_max_degree_ * pi/180;
 matrix_upper_ = wheel_single_direction_max_degree_ * pi/180;
-matrix_state_ = debug;
-pre_matrix_state_ = x(1:4);
 
 % update reference,pre_reference
 reference = zeros(basic_state_size_*horizon_,1);
 pre_reference = reference;
 
 %% calculate control cmd
-[delta_control] = SolveLinearAugmentMPC(matrix_ad_,matrix_bd_,matrix_dd_,pre_matrix_dd_,matrix_q_,matrix_r_,...
+[control] = SolveLinearMPC(matrix_ad_,matrix_bd_,matrix_dd_,pre_matrix_dd_,matrix_q_,matrix_r_,...
     matrix_lower_,matrix_upper_,matrix_state_,pre_matrix_state_,reference,pre_reference,pre_control_);
-pre_control_(1) = pre_control_(1) + delta_control(1);
-for i = 2:vertical_
-    pre_control_(i) = pre_control_(i-1) + delta_control(i);
-end
+pre_control_ = control;
 sys = [matrix_state_;pre_control_(1)];
 
 % end mdlUpdate
